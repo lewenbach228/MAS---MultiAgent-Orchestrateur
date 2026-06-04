@@ -19,16 +19,8 @@ jobs:
           node-version: "22"
           cache: "npm"
 
-      - name: Check npm version & cache
-        run: |
-          npm --version
-          ls -la package.json package-lock.json
-
       - name: Install dependencies
-        run: npm install
-
-      - name: List installed packages
-        run: npm ls --depth=0
+        run: npm ci
 
       - name: TypeScript check
         run: npx tsc --noEmit
