@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import OpenAI from "openai";
 import type { Plan, PlanStep, ExecEntry } from "./types.js";
 import { tools } from "./tools.js";
 import { EventStore } from "./event-store.js";
@@ -9,13 +10,64 @@ const POLL_INTERVAL = 500;
 const POLL_TIMEOUT = 60000;
 
 export class SupervisorAgent {
-  private model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>;
+  private gemini: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>;
+  private deepseek: OpenAI;
   private eventStore: EventStore;
 
   constructor(eventStore: EventStore) {
     const genAI = new GoogleGenerativeAI(config.geminiApiKey);
-    this.model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    this.gemini = genAI.getGenerativeModel({ model: config.geminiModel });
+    this.deepseek = new OpenAI({
+      apiKey: config.deepseekApiKey,
+      baseURL: "https://api.deepseek.com",
+    });
     this.eventStore = eventStore;
+  }
+
+  private async callLLM(prompt: string): Promise<string> {
+    const providers = [
+      {
+        name: "gemini" as const,
+        call: async () => {
+          const result = await this.gemini.generateContent({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json", temperature: 0.3 },
+          });
+          return result.response.text();
+        },
+      },
+      {
+        name: "deepseek" as const,
+        call: async () => {
+          const result = await this.deepseek.chat.completions.create({
+            model: config.deepseekModel,
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.3,
+            response_format: { type: "json_object" },
+          });
+          return result.choices[0]?.message?.content || "";
+        },
+      },
+    ];
+
+    const ordered = providers.sort((a) => (a.name === config.primaryProvider ? -1 : 1));
+    let lastError: Error | null = null;
+
+    for (const provider of ordered) {
+      try {
+        const text = await provider.call();
+        console.log(`  ✔ Appel LLM réussi (${provider.name})`);
+        return text;
+      } catch (err: any) {
+        lastError = err;
+        console.log(`  ✘ Provider ${provider.name} échoué: ${err.message}`);
+        if (ordered.length > 1) {
+          console.log(`  → Fallback vers le provider suivant`);
+        }
+      }
+    }
+
+    throw lastError || new Error("Tous les providers LLM ont échoué");
   }
 
   /** Phase 1 : PLAN — LLM analyse le goal et décompose en étapes */
@@ -52,12 +104,7 @@ Retourne UNIQUEMENT du JSON valide (sans markdown) avec cette structure exacte :
   ]
 }`;
 
-    const result = await this.model.generateContent({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: "application/json", temperature: 0.3 },
-    });
-
-    const text = result.response.text();
+    const text = await this.callLLM(prompt);
     const plan: Plan = JSON.parse(text);
     if (!plan.analysis || !plan.steps || plan.steps.length === 0) {
       throw new Error("Plan invalide généré par l'LLM");

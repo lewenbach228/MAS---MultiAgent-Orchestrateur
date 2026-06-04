@@ -187,6 +187,9 @@ async function start() {
     console.error("❌ GEMINI_API_KEY non définie");
     process.exit(1);
   }
+  if (!config.deepseekApiKey) {
+    console.log("⚠ DEEPSEEK_API_KEY non définie — fallback DeepSeek désactivé");
+  }
 
   eventStore = new EventStore();
   await eventStore.connect();
