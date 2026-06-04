@@ -25,7 +25,10 @@ jobs:
           ls -la package.json package-lock.json
 
       - name: Install dependencies
-        run: npm ci --loglevel verbose 2>&1 | tail -50
+        run: npm install
+
+      - name: List installed packages
+        run: npm ls --depth=0
 
       - name: TypeScript check
         run: npx tsc --noEmit
