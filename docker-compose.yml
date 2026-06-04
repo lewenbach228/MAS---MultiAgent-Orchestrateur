@@ -1,0 +1,112 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      MONGO_URI: mongodb://mongo:27017/p2-orchestrator
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 3000
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./src:/app/src
+    command: npx tsx src/index.ts
+
+  supervisor:
+    build: .
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      MONGO_URI: mongodb://mongo:27017/p2-orchestrator
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./src:/app/src
+    command: npx tsx src/worker.ts
+
+  crm-agent:
+    build: .
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      MONGO_URI: mongodb://mongo:27017/p2-orchestrator
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./src:/app/src
+    command: npx tsx src/agents/crm-agent.ts
+    deploy:
+      replicas: 2
+
+  email-agent:
+    build: .
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      MONGO_URI: mongodb://mongo:27017/p2-orchestrator
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./src:/app/src
+    command: npx tsx src/agents/email-agent.ts
+    deploy:
+      replicas: 1
+
+  tracking-agent:
+    build: .
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      MONGO_URI: mongodb://mongo:27017/p2-orchestrator
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./src:/app/src
+    command: npx tsx src/agents/tracking-agent.ts
+    deploy:
+      replicas: 1
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh --quiet
+      interval: 10s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+volumes:
+  mongo_data:
