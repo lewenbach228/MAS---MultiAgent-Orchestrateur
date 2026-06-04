@@ -10,54 +10,35 @@ Un agent **Plan-and-Execute (Goal-based hierarchical)** qui orchestre des workfl
 
 ```mermaid
 flowchart TD
-    subgraph "Entry Points"
-        API[POST /api/workflows<br/>ou POST /api/webhooks/:type]
-        WH[Webhooks Zapier/Make<br/>onboard-partner<br/>create-campaign]
-        CB[Callback POST<br/>/{callback_url}]
+    subgraph "Entry"
+        API[API REST]
+        WH[Webhooks Zapier/Make]
     end
-
     subgraph "Orchestration"
-        Q[BullMQ Queue<br/>Redis backend]
-        SUP[Supervisor Agent<br/>Gemini 2.5 Flash<br/>Plan → Dispatch → Monitor]
-        ES[(MongoDB Event Store<br/>append-only)]
-        PUB[Redis Pub/Sub<br/>Événements temps réel]
+        SUP[Supervisor Agent<br/>Gemini]
+        Q[BullMQ Queue]
+        ES[(MongoDB<br/>Event Store)]
     end
-
-    subgraph "Agents Spécialisés"
-        CRM[Agent CRM<br/>create_partner_profile]
-        EMAIL[Agent Email<br/>send_agreement<br/>notify_team]
-        TRACK[Agent Tracking<br/>setup_tracking]
+    subgraph "Agents"
+        CRM[Agent CRM]
+        EMAIL[Agent Email]
+        TRACK[Agent Tracking]
     end
-
-    subgraph "Saga Compensation"
-        COMP[Agent CRM → compensate<br/>Agent Email → compensate<br/>Agent Tracking → compensate]
-    end
-
     subgraph "Observation"
-        WS[WebSocket /ws<br/>broadcast events]
-        DASH[Dashboard React<br/>temps réel]
-        REST[GET /api/workflows/:id<br/>GET /api/workflows/:id/events]
+        SAGA[Saga Compensation]
+        DASH[Dashboard WebSocket]
     end
-
-    API -->|1. Ajoute job| Q
-    WH -->|1. Ajoute job| Q
-    Q -->|2. Dispatch| SUP
-    SUP -->|3. Plan steps| ES
-    SUP -->|4. Queue step| Q
-    Q -->|5. Execute| CRM
-    Q -->|5. Execute| EMAIL
-    Q -->|5. Execute| TRACK
-    CRM -->|6. Result| ES
-    EMAIL -->|6. Result| ES
-    TRACK -->|6. Result| ES
-    SUP -->|7. Vérifie succès| ES
-    SUP -->|8. Échec → Saga| COMP
-    COMP -->|9. Compense| ES
-    ES -->|10. Événements| PUB
-    PUB -->|11. Broadcast| WS
-    WS -->|12. Push| DASH
-    REST -->|13. Query| ES
-    SUP -->|14. Callback| CB
+    API --> Q
+    WH --> Q
+    Q --> SUP
+    SUP --> CRM
+    SUP --> EMAIL
+    SUP --> TRACK
+    CRM --> ES
+    EMAIL --> ES
+    TRACK --> ES
+    SUP --> SAGA
+    ES --> DASH
 ```
 
 ---
@@ -121,38 +102,13 @@ Chaque étape est dispatchée dans la queue du sous-agent compétent :
   ✔ Succès (notification Slack envoyée)
 ```
 
-### 4. Sagga Compensation — Si une étape échoue
+### 4. Saga Compensation — Si une étape échoue
 
-Si `send_agreement` échoue (ex: email invalide), le Supervisor déclenche la Saga :
-
-```
-⚠ Étape 2 échouée — Déclenchement Saga (ordre inverse)...
-
-  ✔ Compensation create_partner_profile réussie
-  → Profil partenaire supprimé
-```
-
-Les callbacks sont envoyés sur l'URL configurée :
-
-```json
-POST {callback_url}
-{
-  "workflowId": "wf_1717000000",
-  "status": "failed",
-  "summary": "Échec à l'étape 2 (send_agreement)..."
-}
-```
+Si une étape échoue, le Supervisor déclenche la Saga : les étapes réussies sont compensées en ordre inverse. Chaque outil définit sa propre méthode `compensate()`. Un callback POST est envoyé sur l'URL configurée avec le statut final (SUCCESS, COMPENSATED, FAILED).
 
 ### 5. Dashboard temps réel — WebSocket push
 
-Le dashboard React reçoit chaque événement en temps réel via WebSocket :
-
-```
-→ workflow_update: wf_1717000000
-→ step_completed: create_partner_profile → succès
-→ step_completed: send_agreement → succès
-→ workflow_completed: succès
-```
+Le dashboard React reçoit chaque événement en temps réel via WebSocket (Redis Pub/Sub → broadcast). Timeline animée, toasts de notification, statuts en français.
 
 ---
 
@@ -174,40 +130,15 @@ Le dashboard React reçoit chaque événement en temps réel via WebSocket :
 ## Quick Start
 
 ```bash
-# 1. Démarrer l'infrastructure complète (6 services)
+# Démarrer l'infrastructure (6 services)
 docker compose up -d
 
-# 2. Tester l'API
-curl http://localhost:3000/api/health
-# → {"status":"ok"}
-
-# 3. Lancer un workflow
+# Lancer un workflow
 curl -X POST http://localhost:3000/api/workflows \
   -H "Content-Type: application/json" \
-  -d '{
-    "goal": "Onboard Nike, contact nike@example.com, terms: 5 posts 50000€"
-  }'
+  -d '{"goal":"Onboard Nike, contact nike@example.com, terms: 5 posts 50000€"}'
 
-# 4. Voir le workflow s'exécuter en temps réel
-# → http://localhost:3000/
-
-# 5. Voir l'historique des événements
-curl http://localhost:3000/api/workflows/{workflowId}/events
-```
-
-```yaml
-# docker-compose.yml (extrait — 6 services)
-services:
-  mongodb: mongo:7
-  redis: redis:7-alpine
-  api: build . → port 3000 (Express + WebSocket)
-  worker: tsx src/worker.ts (BullMQ consumer)
-  agent-crm: tsx src/agents/crm-agent.ts
-  agent-email: tsx src/agents/email-agent.ts
-  agent-tracking: tsx src/agents/tracking-agent.ts
-
-# Variable d'environnement requise :
-# GEMINI_API_KEY=...
+# Voir le workflow en temps réel → http://localhost:3000/
 ```
 
 ---
@@ -228,70 +159,4 @@ services:
 | **Webhook pattern** | Entrée (POST /api/webhooks/:type) + sortie (callback POST sur URL configurée) |
 | **BYOK** | GEMINI_API_KEY en variable d'environnement, pas dans le code |
 
-### Leçons de fabrication (Walking Skeleton)
 
-Ce projet a commencé par un **Walking Skeleton minimal** — un seul fichier TypeScript (`walking-skeleton.ts`) qui prouvait le cœur agentique avant toute infrastructure :
-
-```
-walking-skeleton.ts (377 lignes)
-├── Types (Interfaces : Plan, PlanStep, ExecEntry, ToolDef)
-├── Tools (4 outils avec execute + compensate)
-├── SupervisorAgent (class)
-│   ├── plan() → LLM analyse le goal, produit un plan JSON
-│   ├── execute() → boucle séquentielle avec compensation
-│   └── summarize() → résumé final
-└── main() → boucle complète testée avec 2 goals
-```
-
-Testé avec :
-```
-npx tsx walking-skeleton.ts "Onboard Red Bull, contact alice@redbull.com, terms: 3 posts 15000€"
-npx tsx walking-skeleton.ts "Onboard FailingCo, contact fail@test.com, terms: 1 post 1000€"
-```
-
-**Résultat :** le cœur agentique (supervisor → plan → execute → compensate) a fonctionné **du premier coup**. L'infrastructure (Express, MongoDB, BullMQ, Redis, WebSocket, Dashboard) a été ajoutée proprement **après** — sans les bugs de découverte tardive de P1.
-
----
-
-## Limitations
-
-- **Agents simulés** — les 3 sous-agents (CRM, Email, Tracking) simulent leurs actions (pas de vrai CRM, pas d'envoi d'email réel, pas de tracking réel). Le pattern est prouvé, l'intégration réelle est un simple remplacement.
-- **Pas de fallback provider** — Gemini est le seul fournisseur. Un fallback DeepSeek (plus économique) est prévu mais pas encore implémenté.
-- **Pas de tests automatisés** — le projet est en phase de démonstration. Les tests (vitest, supertest) sont à ajouter.
-- **Pas de CI/CD** — pas de GitHub Actions, pas de déploiement automatisé.
-- **Polling MongoDB** — le Supervisor vérifie les résultats des agents via polling MongoDB (500ms). Un pattern plus performant serait un callback/subscription Redis.
-- **Callback unique** — le callback POST est envoyé une fois à la fin du workflow. Un webhook de progression par étape serait plus riche.
-
----
-
-## Structure du projet
-
-```
-p2-orchestrator/
-├── src/
-│   ├── index.ts              # Express API, WebSocket, routes REST
-│   ├── worker.ts             # BullMQ worker consumer
-│   ├── supervisor.ts         # SupervisorAgent class (plan + execute + poll)
-│   ├── event-store.ts        # MongoDB EventStore (append-only)
-│   ├── queue.ts              # BullMQ queue factory
-│   ├── pubsub.ts             # Redis Pub/Sub pour événements temps réel
-│   ├── tools.ts              # 4 outils avec execute + compensate
-│   ├── webhooks.ts           # Payload → Goal converter
-│   ├── types.ts              # Types partagés
-│   ├── config.ts             # Configuration (env vars)
-│   └── agents/
-│       ├── crm-agent.ts      # Agent CRM spécialisé
-│       ├── email-agent.ts    # Agent Email spécialisé
-│       └── tracking-agent.ts # Agent Tracking spécialisé
-├── dashboard/                # Dashboard React (temps réel)
-│   └── src/
-│       ├── App.tsx
-│       ├── EventTimeline.tsx
-│       └── index.html
-├── walking-skeleton.ts       # Preuve agentique minimale (zéro infra)
-├── docker-compose.yml        # 6 services
-├── Dockerfile                # API + Dashboard
-├── .env.example
-├── package.json
-└── tsconfig.json
-```
