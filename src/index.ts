@@ -3,11 +3,13 @@ import path from "path";
 import fs from "fs";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import swaggerUi from "swagger-ui-express";
 import { config } from "./config.js";
 import { EventStore } from "./event-store.js";
 import { workflowQueue } from "./queue.js";
 import { payloadToGoal } from "./webhooks.js";
 import { subscribe } from "./pubsub.js";
+import { openapiSpec, getOpenapiJson } from "./api/swagger.js";
 
 const app = express();
 app.use(express.json());
@@ -15,10 +17,16 @@ app.use(express.json());
 let eventStore: EventStore;
 
 // ============================================================
+// OPENAPI / SWAGGER UI
+// ============================================================
+
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openapiSpec));
+app.get("/api/openapi.json", getOpenapiJson);
+
+// ============================================================
 // REST API ROUTES
 // ============================================================
 
-/** POST /api/workflows — publie un job dans la queue BullMQ */
 app.post("/api/workflows", async (req, res) => {
   try {
     const { goal, callback_url } = req.body;
@@ -43,7 +51,6 @@ app.post("/api/workflows", async (req, res) => {
   }
 });
 
-/** GET /api/workflows — liste les workflows */
 app.get("/api/workflows", async (_req, res) => {
   try {
     const workflows = await eventStore.listWorkflows();
@@ -53,7 +60,6 @@ app.get("/api/workflows", async (_req, res) => {
   }
 });
 
-/** GET /api/workflows/:id — statut d'un workflow */
 app.get("/api/workflows/:id", async (req, res) => {
   try {
     const wf = await eventStore.getWorkflow(req.params.id);
@@ -67,7 +73,6 @@ app.get("/api/workflows/:id", async (req, res) => {
   }
 });
 
-/** GET /api/workflows/:id/events — event sourcing replay */
 app.get("/api/workflows/:id/events", async (req, res) => {
   try {
     const events = await eventStore.replayEvents(req.params.id);
@@ -81,7 +86,6 @@ app.get("/api/workflows/:id/events", async (req, res) => {
 // WEBHOOK ROUTES (entrée style Zapier/Make)
 // ============================================================
 
-/** POST /api/webhooks/:type — webhook d'entrée */
 app.post("/api/webhooks/:type", async (req, res) => {
   try {
     const { type } = req.params;
@@ -113,7 +117,6 @@ app.post("/api/webhooks/:type", async (req, res) => {
   }
 });
 
-/** GET /api/webhooks — liste les types de webhooks supportés */
 app.get("/api/webhooks", async (_req, res) => {
   res.json({
     webhooks: [
@@ -221,11 +224,11 @@ async function start() {
 
   server.listen(config.port, () => {
     console.log(`✔ API + WebSocket lancée sur http://localhost:${config.port}`);
-    console.log(`  POST /api/workflows     → lancer un workflow`);
-    console.log(`  POST /api/webhooks/:type → webhook entrée (Zapier-compatible)`);
-    console.log(`  GET  /api/webhooks       → lister les webhooks supportés`);
-    console.log(`  GET  /api/workflows      → liste`);
-    console.log(`  GET  /api/workflows/:id  → statut`);
+    console.log(`  GET  /api/docs            → documentation interactive (Swagger UI)`);
+    console.log(`  POST /api/workflows       → lancer un workflow`);
+    console.log(`  POST /api/webhooks/:type  → webhook entrée (Zapier-compatible)`);
+    console.log(`  GET  /api/workflows       → liste`);
+    console.log(`  GET  /api/workflows/:id   → statut`);
     console.log(`  GET  /api/workflows/:id/events → event sourcing`);
   });
 }
