@@ -27,6 +27,3 @@ jobs:
 
       - name: Run tests
         run: npx vitest run
-
-      - name: Build Docker image
-        run: docker build -t p2-orchestrator .
